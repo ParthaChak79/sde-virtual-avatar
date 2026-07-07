@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Your Employee</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
+  video { width: 100%; max-width: 480px; border-radius: 12px; background: #111; display: block; margin: 0 auto; }
+  #status { text-align: center; color: #666; margin: 8px 0 20px; }
+  #transcript { border: 1px solid #ddd; border-radius: 8px; padding: 12px; height: 200px; overflow-y: auto; margin-bottom: 12px; }
+  #transcript p { margin: 4px 0; }
+  #transcript .them { color: #333; }
+  #transcript .me { color: #0a5; text-align: right; }
+  form { display: flex; gap: 8px; }
+  input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 15px; }
+  button { padding: 10px 18px; border: none; border-radius: 6px; background: #222; color: white; font-size: 15px; cursor: pointer; }
+  button:disabled { background: #999; }
+</style>
+</head>
+<body>
+  <button id="join" style="display: block; margin: 60px auto; padding: 16px 32px; font-size: 17px;">Join Call</button>
+  <div id="call" style="display: none;">
+    <video id="video" autoplay playsinline></video>
+    <audio id="audio" autoplay></audio>
+    <p id="status">connecting...</p>
+    <div id="transcript"></div>
+    <form id="form">
+      <input id="input" type="text" placeholder="Type a message..." autocomplete="off" disabled>
+      <button id="send" type="submit" disabled>Send</button>
+    </form>
+  </div>
+
+<script type="module">
+import { SimliClient, LogLevel } from "/simli_client_bundle.js";
+
+const statusEl = document.getElementById("status");
+const transcriptEl = document.getElementById("transcript");
+const formEl = document.getElementById("form");
+const inputEl = document.getElementById("input");
+const sendEl = document.getElementById("send");
+const videoEl = document.getElementById("video");
+const audioEl = document.getElementById("audio");
+
+function addLine(who, text) {
+  const p = document.createElement("p");
+  p.className = who;
+  p.textContent = text;
+  transcriptEl.appendChild(p);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+const AUDIO_CHUNK_SIZE = 6000;
+
+function sendAudioInChunks(simliClient, bytes) {
+  for (let i = 0; i < bytes.length; i += AUDIO_CHUNK_SIZE) {
+    simliClient.sendAudioData(bytes.slice(i, i + AUDIO_CHUNK_SIZE));
+  }
+}
+
+async function main() {
+  const sessionResp = await fetch("/session");
+  const { session_token, ice_servers } = await sessionResp.json();
+
+  const simliClient = new SimliClient(
+    session_token,
+    videoEl,
+    audioEl,
+    ice_servers,
+    LogLevel.INFO,
+    "p2p",
+  );
+  await simliClient.start();
+  statusEl.textContent = "connected";
+  // Autoplay is only reliably allowed right after a user gesture (the Join
+  // Call click) -- explicitly (re)triggering play() here, rather than just
+  // relying on the autoplay attribute, avoids silent no-audio/no-video on
+  // browsers that are stricter about when a programmatically-set srcObject
+  // is allowed to start.
+  videoEl.play().catch((e) => console.warn("video play() failed:", e));
+  audioEl.play().catch((e) => console.warn("audio play() failed:", e));
+
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
+
+  ws.addEventListener("message", (event) => {
+    if (typeof event.data === "string") {
+      const msg = JSON.parse(event.data);
+      if (msg.type === "text") {
+        addLine("them", msg.text);
+      } else if (msg.type === "error") {
+        addLine("them", `(something went wrong: ${msg.message})`);
+      }
+    } else {
+      sendAudioInChunks(simliClient, new Uint8Array(event.data));
+    }
+  });
+
+  ws.addEventListener("open", () => {
+    inputEl.disabled = false;
+    sendEl.disabled = false;
+    inputEl.focus();
+  });
+
+  ws.addEventListener("close", () => {
+    statusEl.textContent = "disconnected";
+    inputEl.disabled = true;
+    sendEl.disabled = true;
+  });
+
+  formEl.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const text = inputEl.value.trim();
+    if (!text) return;
+    addLine("me", text);
+    ws.send(JSON.stringify({ type: "user_text", text }));
+    inputEl.value = "";
+  });
+}
+
+document.getElementById("join").addEventListener("click", () => {
+  document.getElementById("join").style.display = "none";
+  document.getElementById("call").style.display = "block";
+  main().catch((err) => {
+    const reason = (err && err.message) ? err.message : String(err);
+    statusEl.textContent = "failed to connect: " + reason;
+    console.error(err);
+  });
+});
+</script>
+</body>
+</html>

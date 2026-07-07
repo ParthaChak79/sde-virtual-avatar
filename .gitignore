@@ -2,3 +2,9 @@
 __pycache__/
 *.pyc
 .env
+.build/
+*.mp4
+*.png
+*.jpg
+*.jpeg
+.claude/
