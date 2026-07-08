@@ -25,40 +25,57 @@ Phase 0 (terminal-only worker) and Phase 2-equivalent (worker driving a real
 video call) are both working, via Simli rather than the original
 LiveTalking/RunPod plan (see "Why Simli instead of LiveTalking/RunPod"
 below). The avatar uses a real custom face generated from the owner's own
-photo. Remaining Phase 3 items: a cloned voice (currently edge-tts, not a
-cloned voice) and outbound "employee calls you" notifications — not started,
-and the latter needs a real design decision since a browser tab can't be
-rung if it isn't open.
+photo. Since then the call page has grown past a single fixed project: it
+now opens on a project picker (attach to the project already running or
+create a new one under `~/Downloads/AI Projects/`), the owner can talk
+instead of type (browser speech-to-text), and the page shows a live
+plain-English activity feed plus an embedded preview of anything she stands
+up a local server for. Remaining Phase 3 items: a cloned voice (currently
+edge-tts, not a cloned voice) and outbound "employee calls you"
+notifications — not started, and the latter needs a real design decision
+since a browser tab can't be rung if it isn't open.
 
 ## Architecture
 
 ```
 Your Mac (this repo)
-┌───────────────────────────────────────────────────────────────┐
+┌────────────────────────────────────────────────────────────────┐
 │ avatar_worker_session.py                                        │
-│  SessionManager/WorkerSession: one ClaudeSDKClient per project,│
-│  plan→acceptEdits, PreToolUse risk hook                        │
+│  SessionManager: one persistent WorkerSession/ClaudeSDKClient   │
+│  per project (keyed by project_id), plan→acceptEdits,           │
+│  PreToolUse risk hook, on_speak + on_activity callbacks         │
 │                                                                   │
 │ simli_bridge.py (local web server, localhost:8765)               │
-│  GET /        -> serves simli_call.html                          │
-│  GET /session -> mints a short-lived Simli session_token +       │
-│                  ICE servers server-side (real API key never      │
-│                  reaches the browser)                            │
-│  GET /ws      -> browser's text in, WorkerSession replies out    │
-│                  as {type:"text"} + PCM16 audio bytes            │
+│  GET  /            -> serves simli_call.html                     │
+│  GET  /session     -> mints a short-lived Simli session_token +  │
+│                       ICE servers server-side (real API key       │
+│                       never reaches the browser)                 │
+│  GET  /projects    -> lists this project + everything under       │
+│                       AI_PROJECTS_DIR                             │
+│  POST /projects    -> creates a new project folder there          │
+│  GET  /ws?project= -> browser's text in, WorkerSession replies    │
+│                       out as {type:"text"}, {type:"activity"}      │
+│                       + PCM16 audio bytes                         │
 │  edge-tts (mp3) -> ffmpeg -> PCM16/16kHz mono, per utterance      │
-└───────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────┘
               │ browser opens http://localhost:8765/
               ▼
 simli_call.html (served locally, runs entirely in the browser)
-  - Join Call button (its click is required so the browser allows
-    audio/video autoplay -- connecting automatically on page load
-    gets silently blocked)
+  - Project picker screen first: pick an existing project or type
+    a name to create one, then Join Call (click required so the
+    browser allows audio/video autoplay -- connecting automatically
+    on page load gets silently blocked)
   - Simli JS SDK (bundled locally, see below) opens the actual
     WebRTC session directly to Simli's cloud using the session_token
   - forwards PCM16 audio bytes it gets from /ws into that same
     WebRTC session via simliClient.sendAudioData()
-  - displays the returned lip-synced video/audio
+  - mic button uses the browser's built-in speech recognition to
+    turn talking into the same {type:"user_text"} messages typing
+    already sent
+  - left panel: avatar video/audio, transcript, type/talk controls;
+    right panel: a live activity feed ({type:"activity"} messages)
+    and an iframe preview that lights up when she states a
+    reachable http://localhost address
 ```
 
 Why it's shaped this way:
@@ -95,12 +112,47 @@ avatar API eliminates entirely. `livetalking_bridge.py` is kept in the repo
 as historical reference, not part of the running system — the RunPod pod
 itself has been terminated.
 
+### Multiple projects
+
+`SessionManager` (`avatar_worker_session.py`) was already keyed by
+`project_id`, so nothing there needed to change to support more than one
+project — `simli_bridge.py` just needed a way to let the browser pick one.
+The call page now opens on a picker (`GET /projects`) instead of going
+straight to Join Call:
+- Every project the browser can attach to is either this repo (fixed
+  `PROJECT_ID`/`CWD`) or a folder under `AI_PROJECTS_DIR`
+  (`~/Downloads/AI Projects/`); `POST /projects` creates a new one there.
+- `handle_ws` never trusts a folder path sent by the browser directly — it
+  looks the `project_id` up in the server-side `KNOWN_PROJECTS` dict
+  (populated by `/projects`), so a stray request can't point a worker at an
+  arbitrary path on disk.
+- One `asyncio.Lock` per project (`session_locks`, not the old single global
+  lock) — otherwise a slow reply in one project's call would stall an
+  unrelated project's call that happened to be running at the same time.
+
+### Live activity feed and website preview
+
+Two more channels ride the same `/ws` connection alongside speech:
+- **Activity feed**: `WorkerSession` also takes an `on_activity` callback,
+  fired from the `PostToolUse` hook with the same plain-English summary used
+  for `status_report()`. `simli_bridge.py` forwards each one to the browser
+  as `{type:"activity"}`; the right-hand panel lists them live.
+- **Live preview**: the appended system prompt tells the worker to actually
+  start a local server (e.g. `python3 -m http.server <port>`) before stating
+  an address out loud, and to never state one that isn't genuinely
+  reachable. The browser regex-matches spoken text for a
+  `localhost`/`127.0.0.1` URL and, before switching the embedded iframe over
+  to it, polls it with `fetch(url, {mode:"no-cors"})` for up to ~10 seconds —
+  there's a real race between her finishing the sentence and the server
+  actually accepting connections, and a bare `iframe.src` assignment doesn't
+  get a second chance if it loses that race.
+
 ## Commands
 
 ```bash
 cd "/Users/partha/Downloads/SDE Virtual Avatar"
 source .venv/bin/activate
-pip install -r requirements.txt      # claude-agent-sdk, aiohttp, edge_tts, websockets
+pip install -r requirements.txt      # claude-agent-sdk, aiohttp, edge_tts, websockets, python-dotenv
 
 python3 test_worker.py               # talk to the worker in a plain terminal, no avatar
 python3 -u simli_bridge.py           # start the call server, then open http://localhost:8765/
@@ -108,6 +160,10 @@ python3 -u simli_bridge.py           # start the call server, then open http://l
 
 `ffmpeg` must be on PATH (`brew install ffmpeg`) — used to convert edge-tts's
 mp3 output to the PCM16/16kHz/mono format Simli requires.
+
+`SIMLI_API_KEY` lives in `.env` (git-ignored, not committed) and is loaded
+via `python-dotenv`'s `load_dotenv()` at the top of `simli_bridge.py` — set
+`.env` to `SIMLI_API_KEY=...` before running.
 
 ### Rebuilding `simli_client_bundle.js`
 
@@ -133,8 +189,8 @@ npx esbuild entry.js --bundle --format=esm --platform=browser --outfile=../simli
   only needs a single photo (no video/looping required, unlike the old
   LiveTalking pipeline). Poll `GET .../generation_status?face_id=...`.
 - The current face id is hardcoded as `SIMLI_FACE_ID` in `simli_bridge.py`.
-- `SIMLI_API_KEY` is also currently hardcoded there — move to an env var
-  before this goes anywhere near being shared or committed publicly.
+- `SIMLI_API_KEY` lives in `.env` (see Commands above) and is read with
+  `os.environ["SIMLI_API_KEY"]` — never put the real key back in source.
 
 ## Design decisions that must not be casually changed
 
@@ -158,6 +214,14 @@ npx esbuild entry.js --bundle --format=esm --platform=browser --outfile=../simli
   must be resolved *without* waiting on `session_lock` — the in-flight
   `session.send()` that's blocked on that exact confirmation is the lock
   holder, so waiting for the lock there would deadlock.
+- **Project lookups go through `KNOWN_PROJECTS`, never a client-supplied
+  path** (see Multiple projects above) — this is the only thing standing
+  between "browser picks a project by name" and "browser tells the worker
+  which folder on disk to touch."
+- **Live preview addresses must come from a running server, not a guess** —
+  the appended prompt rule and the browser's retry-before-switching logic
+  exist together for this reason; weakening either one reintroduces
+  "localhost refused to connect."
 
 ## Known gotchas learned the hard way
 
@@ -180,3 +244,12 @@ npx esbuild entry.js --bundle --format=esm --platform=browser --outfile=../simli
 - Errors thrown inside `SimliClient` are sometimes plain strings, not
   `Error` objects — code that assumes `err.message` exists will silently
   show `"undefined"` instead of the real reason.
+- The Web Speech API's default `continuous = false` ends the recognizer the
+  moment it detects a pause (a breath, a thought), which cut off longer
+  spoken instructions mid-sentence. `simli_call.html`'s mic button uses
+  `continuous = true` instead and only finalizes/sends the transcript when
+  the mic button is clicked again.
+- A freshly spoken `http://localhost:PORT` isn't necessarily reachable yet
+  even when the worker did start a real server — there's a startup race, so
+  the preview iframe's `src` is only set after a short
+  `fetch(url, {mode:"no-cors"})` retry loop confirms something's listening.

@@ -48,6 +48,14 @@ normal behavior:
   brief line first so it doesn't go quiet — e.g. "Let me go check that."
 - Keep replies short and conversational, like a status update you'd give
   out loud on a call, not a written report.
+- If you finish something the owner can look at in a browser (a webpage, a
+  small app), actually start a local web server for it in the background
+  first — for a plain webpage with no build step, `python3 -m http.server
+  <port>` run in the background from that folder is enough — and only then
+  say the exact address out loud, e.g. "You can see it now at
+  http://localhost:5173". That address is what puts a live preview on their
+  screen, so never state one unless something is genuinely running and
+  reachable there, and never leave it out or paraphrase it away once it is.
 """
 
 _READ_ONLY_TOOLS = {
@@ -161,10 +169,17 @@ def _looks_like_approval(text: str) -> bool:
 class WorkerSession:
     """One persistent Claude Agent SDK session tied to one project directory."""
 
-    def __init__(self, project_id: str, cwd: str, on_speak: Callable[[str], None] | None = None):
+    def __init__(
+        self,
+        project_id: str,
+        cwd: str,
+        on_speak: Callable[[str], None] | None = None,
+        on_activity: Callable[[str], None] | None = None,
+    ):
         self.project_id = project_id
         self.cwd = cwd
         self.on_speak: Callable[[str], None] = on_speak or (lambda text: print(text))
+        self.on_activity: Callable[[str], None] = on_activity or (lambda text: None)
         self.mode: str = "plan"
         self.work_log: list[WorkLogEntry] = []
         self.pending_confirmation: asyncio.Future[bool] | None = None
@@ -309,7 +324,9 @@ class WorkerSession:
     async def _post_tool_use(self, input_data, tool_use_id, context):
         tool_name = input_data.get("tool_name", "")
         tool_input = input_data.get("tool_input") or {}
-        self.work_log.append(WorkLogEntry(summary=_summarize_tool_call(tool_name, tool_input)))
+        summary = _summarize_tool_call(tool_name, tool_input)
+        self.work_log.append(WorkLogEntry(summary=summary))
+        self.on_activity(summary)
         return {}
 
 
@@ -319,20 +336,35 @@ class SessionManager:
     def __init__(self):
         self._sessions: dict[str, WorkerSession] = {}
 
-    async def get_or_create(self, project_id: str, cwd: str, on_speak: Callable[[str], None] | None = None) -> WorkerSession:
+    async def get_or_create(
+        self,
+        project_id: str,
+        cwd: str,
+        on_speak: Callable[[str], None] | None = None,
+        on_activity: Callable[[str], None] | None = None,
+    ) -> WorkerSession:
         session = self._sessions.get(project_id)
         if session is None:
-            session = WorkerSession(project_id, cwd, on_speak=on_speak)
+            session = WorkerSession(project_id, cwd, on_speak=on_speak, on_activity=on_activity)
             await session.start()
             self._sessions[project_id] = session
-        elif on_speak is not None:
-            session.on_speak = on_speak
+        else:
+            if on_speak is not None:
+                session.on_speak = on_speak
+            if on_activity is not None:
+                session.on_activity = on_activity
         return session
 
-    async def attach(self, project_id: str, cwd: str, on_speak: Callable[[str], None] | None = None) -> tuple[WorkerSession, bool]:
+    async def attach(
+        self,
+        project_id: str,
+        cwd: str,
+        on_speak: Callable[[str], None] | None = None,
+        on_activity: Callable[[str], None] | None = None,
+    ) -> tuple[WorkerSession, bool]:
         """Attach a call/terminal to a project's worker. Returns (session, was_already_running)."""
         was_running = project_id in self._sessions
-        session = await self.get_or_create(project_id, cwd, on_speak=on_speak)
+        session = await self.get_or_create(project_id, cwd, on_speak=on_speak, on_activity=on_activity)
         return session, was_running
 
     def detach(self, project_id: str) -> None:
@@ -340,6 +372,7 @@ class SessionManager:
         session = self._sessions.get(project_id)
         if session is not None:
             session.on_speak = lambda text: None
+            session.on_activity = lambda text: None
 
     def resolve_pending_confirmation(self, project_id: str, approved: bool) -> bool:
         session = self._sessions.get(project_id)

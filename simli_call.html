@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <title>Your Employee</title>
 <style>
-  body { font-family: -apple-system, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
-  video { width: 100%; max-width: 480px; border-radius: 12px; background: #111; display: block; margin: 0 auto; }
+  body { font-family: -apple-system, sans-serif; max-width: 1100px; margin: 40px auto; padding: 0 16px; }
+  video { width: 100%; border-radius: 12px; background: #111; display: block; margin: 0 auto; }
   #status { text-align: center; color: #666; margin: 8px 0 20px; }
   #transcript { border: 1px solid #ddd; border-radius: 8px; padding: 12px; height: 200px; overflow-y: auto; margin-bottom: 12px; }
   #transcript p { margin: 4px 0; }
@@ -15,19 +15,66 @@
   input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 15px; }
   button { padding: 10px 18px; border: none; border-radius: 6px; background: #222; color: white; font-size: 15px; cursor: pointer; }
   button:disabled { background: #999; }
+  #mic.listening { background: #c0392b; }
+  #picker { margin: 60px auto 0; max-width: 420px; }
+  #picker h2 { text-align: center; font-size: 17px; color: #444; font-weight: normal; }
+  #projectList { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
+  #projectList button { background: #eee; color: #222; text-align: left; }
+  #projectList button:hover { background: #ddd; }
+  #createForm { display: flex; gap: 8px; }
+  #pickerError { color: #c0392b; text-align: center; margin-top: 10px; }
+  #join { display: block; margin: 30px auto; padding: 16px 32px; font-size: 17px; }
+
+  .callGrid { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+  .leftPanel { flex: 0 0 360px; }
+  .rightPanel { flex: 1 1 420px; min-width: 320px; display: flex; flex-direction: column; gap: 16px; }
+
+  #previewBox { border: 1px solid #ddd; border-radius: 8px; background: #fafafa; min-height: 300px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  #previewPlaceholder { color: #999; font-size: 14px; text-align: center; padding: 20px; }
+  #preview { width: 100%; height: 360px; border: none; display: block; }
+
+  #activityBox { border: 1px solid #ddd; border-radius: 8px; padding: 12px; }
+  #activityBox h3 { margin: 0 0 10px; font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+  #activityFeed { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 7px; }
+  #activityFeed p { margin: 0; font-size: 13px; color: #555; padding-left: 14px; position: relative; }
+  #activityFeed p::before { content: "\25cf"; position: absolute; left: 0; top: 3px; color: #0a5; font-size: 8px; }
 </style>
 </head>
 <body>
-  <button id="join" style="display: block; margin: 60px auto; padding: 16px 32px; font-size: 17px;">Join Call</button>
-  <div id="call" style="display: none;">
-    <video id="video" autoplay playsinline></video>
-    <audio id="audio" autoplay></audio>
-    <p id="status">connecting...</p>
-    <div id="transcript"></div>
-    <form id="form">
-      <input id="input" type="text" placeholder="Type a message..." autocomplete="off" disabled>
-      <button id="send" type="submit" disabled>Send</button>
+  <div id="picker">
+    <h2>Which project should I work on?</h2>
+    <div id="projectList"></div>
+    <form id="createForm">
+      <input id="newProjectName" type="text" placeholder="Name a new project..." autocomplete="off">
+      <button type="submit">Create</button>
     </form>
+    <p id="pickerError"></p>
+  </div>
+  <button id="join" style="display: none;">Join Call</button>
+  <div id="call" style="display: none;">
+    <div class="callGrid">
+      <div class="leftPanel">
+        <video id="video" autoplay playsinline></video>
+        <audio id="audio" autoplay></audio>
+        <p id="status">connecting...</p>
+        <div id="transcript"></div>
+        <form id="form">
+          <input id="input" type="text" placeholder="Type a message..." autocomplete="off" disabled>
+          <button id="mic" type="button" disabled title="Talk instead of typing">🎤</button>
+          <button id="send" type="submit" disabled>Send</button>
+        </form>
+      </div>
+      <div class="rightPanel">
+        <div id="previewBox">
+          <p id="previewPlaceholder">Nothing to preview yet — I'll show it here as soon as something's running.</p>
+          <iframe id="preview" style="display: none;"></iframe>
+        </div>
+        <div id="activityBox">
+          <h3>What she's doing</h3>
+          <div id="activityFeed"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
 <script type="module">
@@ -38,8 +85,61 @@ const transcriptEl = document.getElementById("transcript");
 const formEl = document.getElementById("form");
 const inputEl = document.getElementById("input");
 const sendEl = document.getElementById("send");
+const micEl = document.getElementById("mic");
 const videoEl = document.getElementById("video");
 const audioEl = document.getElementById("audio");
+const pickerEl = document.getElementById("picker");
+const projectListEl = document.getElementById("projectList");
+const createFormEl = document.getElementById("createForm");
+const newProjectNameEl = document.getElementById("newProjectName");
+const pickerErrorEl = document.getElementById("pickerError");
+const joinEl = document.getElementById("join");
+const previewBoxEl = document.getElementById("previewBox");
+const previewPlaceholderEl = document.getElementById("previewPlaceholder");
+const previewEl = document.getElementById("preview");
+const activityFeedEl = document.getElementById("activityFeed");
+
+let selectedProject = null;
+
+function selectProject(project) {
+  selectedProject = project;
+  pickerEl.style.display = "none";
+  joinEl.textContent = `Join Call — ${project.name}`;
+  joinEl.style.display = "block";
+}
+
+async function loadProjects() {
+  const res = await fetch("/projects");
+  const projects = await res.json();
+  projectListEl.innerHTML = "";
+  for (const project of projects) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = project.name;
+    btn.addEventListener("click", () => selectProject(project));
+    projectListEl.appendChild(btn);
+  }
+}
+
+createFormEl.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const name = newProjectNameEl.value.trim();
+  if (!name) return;
+  pickerErrorEl.textContent = "";
+  const res = await fetch("/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  const project = await res.json();
+  if (!res.ok) {
+    pickerErrorEl.textContent = project.error || "Couldn't create that project.";
+    return;
+  }
+  selectProject(project);
+});
+
+loadProjects();
 
 function addLine(who, text) {
   const p = document.createElement("p");
@@ -47,6 +147,50 @@ function addLine(who, text) {
   p.textContent = text;
   transcriptEl.appendChild(p);
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+function addActivityLine(text) {
+  const p = document.createElement("p");
+  p.textContent = text;
+  activityFeedEl.appendChild(p);
+  activityFeedEl.scrollTop = activityFeedEl.scrollHeight;
+}
+
+// Matches a local address like http://localhost:5173/foo -- when she
+// mentions one out loud (see the plain-English rule server-side that tells
+// her to always state it), it gets dropped straight into the preview frame.
+const LOCAL_URL_RE = /https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?(?:\/\S*)?/i;
+
+let previewTargetUrl = null;
+
+async function showPreview(url) {
+  if (previewTargetUrl === url) return;
+  previewTargetUrl = url;
+
+  previewEl.style.display = "none";
+  previewPlaceholderEl.style.display = "block";
+  previewPlaceholderEl.textContent = "Starting the preview...";
+
+  // She may say the address a moment before the server is actually ready to
+  // accept connections, so retry briefly instead of failing on the first
+  // refused connection. mode: "no-cors" just needs *something* to answer --
+  // we can't read the response across origins, but a connection refusal
+  // still rejects the fetch, which is all we need to know.
+  for (let attempt = 0; attempt < 10; attempt++) {
+    if (previewTargetUrl !== url) return; // a newer URL came in meanwhile
+    try {
+      await fetch(url, { mode: "no-cors" });
+      previewEl.src = url;
+      previewEl.style.display = "block";
+      previewPlaceholderEl.style.display = "none";
+      return;
+    } catch (e) {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  if (previewTargetUrl === url) {
+    previewPlaceholderEl.textContent = `She mentioned ${url}, but nothing's answering there yet.`;
+  }
 }
 
 const AUDIO_CHUNK_SIZE = 6000;
@@ -79,7 +223,9 @@ async function main() {
   videoEl.play().catch((e) => console.warn("video play() failed:", e));
   audioEl.play().catch((e) => console.warn("audio play() failed:", e));
 
-  const ws = new WebSocket(`ws://${location.host}/ws`);
+  const wsUrl = new URL(`ws://${location.host}/ws`);
+  wsUrl.searchParams.set("project", selectedProject.id);
+  const ws = new WebSocket(wsUrl);
   ws.binaryType = "arraybuffer";
 
   ws.addEventListener("message", (event) => {
@@ -87,6 +233,10 @@ async function main() {
       const msg = JSON.parse(event.data);
       if (msg.type === "text") {
         addLine("them", msg.text);
+        const match = msg.text.match(LOCAL_URL_RE);
+        if (match) showPreview(match[0]);
+      } else if (msg.type === "activity") {
+        addActivityLine(msg.text);
       } else if (msg.type === "error") {
         addLine("them", `(something went wrong: ${msg.message})`);
       }
@@ -98,6 +248,7 @@ async function main() {
   ws.addEventListener("open", () => {
     inputEl.disabled = false;
     sendEl.disabled = false;
+    micEl.disabled = !recognition;
     inputEl.focus();
   });
 
@@ -105,20 +256,90 @@ async function main() {
     statusEl.textContent = "disconnected";
     inputEl.disabled = true;
     sendEl.disabled = true;
+    micEl.disabled = true;
   });
 
-  formEl.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const text = inputEl.value.trim();
+  function sendMessage(text) {
+    text = text.trim();
     if (!text) return;
     addLine("me", text);
     ws.send(JSON.stringify({ type: "user_text", text }));
     inputEl.value = "";
+  }
+
+  formEl.addEventListener("submit", (event) => {
+    event.preventDefault();
+    sendMessage(inputEl.value);
   });
+
+  // Speech-to-text uses the browser's built-in recognizer (Chrome/Edge) --
+  // free and needs no server-side API key, but it sends audio to Google's
+  // servers to transcribe and isn't available in every browser (e.g.
+  // Firefox), hence the feature-detect + disabled-button fallback above.
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognition = null;
+  let listening = false;
+  let finalTranscript = "";
+
+  if (SpeechRecognition) {
+    recognition = new SpeechRecognition();
+    recognition.lang = "en-US";
+    // continuous=true keeps the mic open across pauses (a breath, a thought)
+    // instead of Chrome deciding you're "done" and cutting the sentence off
+    // the moment it hears silence -- you end it yourself with the mic button.
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    recognition.addEventListener("result", (event) => {
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript + " ";
+        } else {
+          interim += transcript;
+        }
+      }
+      inputEl.value = (finalTranscript + interim).trim();
+    });
+
+    recognition.addEventListener("end", () => {
+      listening = false;
+      micEl.classList.remove("listening");
+      statusEl.textContent = "connected";
+      const text = finalTranscript.trim();
+      finalTranscript = "";
+      if (text) sendMessage(text);
+    });
+
+    recognition.addEventListener("error", (event) => {
+      listening = false;
+      micEl.classList.remove("listening");
+      finalTranscript = "";
+      statusEl.textContent = event.error === "not-allowed"
+        ? "microphone access denied"
+        : "connected";
+    });
+
+    micEl.addEventListener("click", () => {
+      if (listening) {
+        recognition.stop();
+        return;
+      }
+      listening = true;
+      finalTranscript = "";
+      inputEl.value = "";
+      micEl.classList.add("listening");
+      statusEl.textContent = "listening... (click the mic again when you're done)";
+      recognition.start();
+    });
+  } else {
+    micEl.title = "Voice input isn't supported in this browser -- try Chrome or Edge";
+  }
 }
 
-document.getElementById("join").addEventListener("click", () => {
-  document.getElementById("join").style.display = "none";
+joinEl.addEventListener("click", () => {
+  joinEl.style.display = "none";
   document.getElementById("call").style.display = "block";
   main().catch((err) => {
     const reason = (err && err.message) ? err.message : String(err);

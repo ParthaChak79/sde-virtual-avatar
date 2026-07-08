@@ -27,13 +27,27 @@ import os
 
 import edge_tts
 from aiohttp import web
+from dotenv import load_dotenv
 
 from avatar_worker_session import SESSIONS
+
+load_dotenv()
 
 PROJECT_ID = "sde-virtual-avatar"
 CWD = "/Users/partha/Downloads/SDE Virtual Avatar"
 
-SIMLI_API_KEY = "1v5c5ywouar7hkgwmk2nqo"
+# Where new projects the avatar creates for you live. Picking a project on
+# the page before joining the call is what tells this server which folder
+# (and which persistent WorkerSession) to attach to -- see handle_ws.
+AI_PROJECTS_DIR = os.path.expanduser("~/Downloads/AI Projects")
+
+# project_id -> cwd, for every project the browser has seen via /projects.
+# handle_ws looks the cwd up here rather than trusting a path from the
+# browser directly, so a stray request can't point a worker at an arbitrary
+# folder on disk.
+KNOWN_PROJECTS: dict[str, str] = {PROJECT_ID: CWD}
+
+SIMLI_API_KEY = os.environ["SIMLI_API_KEY"]
 SIMLI_FACE_ID = "61141d2c-2729-42c3-8c72-86fae138667e"
 SIMLI_COMPOSE_TOKEN_URL = "https://api.simli.ai/compose/token"
 SIMLI_ICE_URL = "https://api.simli.ai/compose/ice"
@@ -94,13 +108,52 @@ async def handle_index(request: web.Request) -> web.FileResponse:
     return web.FileResponse(os.path.join(os.path.dirname(__file__), "simli_call.html"))
 
 
+def _sanitize_project_name(name: str) -> str:
+    """Reduce a user-typed project name to a safe folder name (no path traversal)."""
+    name = os.path.basename(name.strip())
+    return "" if name in ("", ".", "..") else name
+
+
+async def handle_list_projects(request: web.Request) -> web.Response:
+    """Existing project the browser can attach to: this project, plus anything under AI_PROJECTS_DIR."""
+    os.makedirs(AI_PROJECTS_DIR, exist_ok=True)
+    projects = [{"id": PROJECT_ID, "name": "This project (already open)", "cwd": CWD}]
+    for entry in sorted(os.listdir(AI_PROJECTS_DIR)):
+        full = os.path.join(AI_PROJECTS_DIR, entry)
+        if os.path.isdir(full):
+            KNOWN_PROJECTS[entry] = full
+            projects.append({"id": entry, "name": entry, "cwd": full})
+    return web.json_response(projects)
+
+
+async def handle_create_project(request: web.Request) -> web.Response:
+    """Make a new project folder under AI_PROJECTS_DIR for the avatar to work in."""
+    body = await request.json()
+    name = _sanitize_project_name(str(body.get("name", "")))
+    if not name:
+        return web.json_response({"error": "Please give the project a name."}, status=400)
+
+    os.makedirs(AI_PROJECTS_DIR, exist_ok=True)
+    path = os.path.join(AI_PROJECTS_DIR, name)
+    os.makedirs(path, exist_ok=True)
+    KNOWN_PROJECTS[name] = path
+    return web.json_response({"id": name, "name": name, "cwd": path})
+
+
 async def handle_ws(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse(heartbeat=20)
     await ws.prepare(request)
 
-    session, was_running = await SESSIONS.attach(PROJECT_ID, CWD, on_speak=lambda t: None)
+    project_id = request.query.get("project", PROJECT_ID)
+    cwd = KNOWN_PROJECTS.get(project_id, CWD)
+
+    session, was_running = await SESSIONS.attach(project_id, cwd, on_speak=lambda t: None, on_activity=lambda t: None)
     session.auto_prompt_terminal = False
-    session_lock: asyncio.Lock = request.app["session_lock"]
+
+    # One lock per project (not one global lock) -- otherwise a slow reply in
+    # one project's call would stall a totally unrelated project's call.
+    session_locks: dict[str, asyncio.Lock] = request.app["session_locks"]
+    session_lock = session_locks.setdefault(project_id, asyncio.Lock())
 
     opening = session.status_report() if was_running else "Hi, I'm ready to help. What would you like me to work on?"
     await ws.send_str(json.dumps({"type": "text", "text": opening}))
@@ -118,17 +171,21 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
             session.resolve_pending_confirmation(_looks_like_yes(text))
             continue
 
-        # Queue + dedicated drain task: on_speak is a sync callback fired from
-        # inside WorkerSession's async code, so it can't await a send directly.
-        # A plain create_task-per-utterance would let ffmpeg/edge-tts timing
-        # reorder multiple utterances from one turn; the queue keeps them in
-        # the order they were spoken.
+        # Queue + dedicated drain task: on_speak/on_activity are sync callbacks
+        # fired from inside WorkerSession's async code, so they can't await a
+        # send directly. A plain create_task-per-utterance would let
+        # ffmpeg/edge-tts timing reorder multiple utterances from one turn;
+        # the queue keeps them in the order they happened.
         speak_queue: asyncio.Queue = asyncio.Queue()
+        activity_queue: asyncio.Queue = asyncio.Queue()
 
         def on_speak_sync(utterance: str) -> None:
             speak_queue.put_nowait(utterance)
 
-        async def drain() -> None:
+        def on_activity_sync(summary: str) -> None:
+            activity_queue.put_nowait(summary)
+
+        async def drain_speak() -> None:
             while True:
                 utterance = await speak_queue.get()
                 if utterance is None:
@@ -137,26 +194,39 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                 pcm = await text_to_pcm16(utterance)
                 await ws.send_bytes(pcm)
 
-        drain_task = asyncio.create_task(drain())
+        async def drain_activity() -> None:
+            while True:
+                summary = await activity_queue.get()
+                if summary is None:
+                    break
+                await ws.send_str(json.dumps({"type": "activity", "text": summary}))
+
+        speak_task = asyncio.create_task(drain_speak())
+        activity_task = asyncio.create_task(drain_activity())
 
         async with session_lock:
             session.on_speak = on_speak_sync
+            session.on_activity = on_activity_sync
             try:
                 await session.send(text)
             except Exception as e:
                 await ws.send_str(json.dumps({"type": "error", "message": str(e)}))
 
         await speak_queue.put(None)
-        await drain_task
+        await activity_queue.put(None)
+        await speak_task
+        await activity_task
 
     return ws
 
 
 def main() -> None:
     app = web.Application()
-    app["session_lock"] = asyncio.Lock()
+    app["session_locks"] = {}
     app.router.add_get("/", handle_index)
     app.router.add_get("/session", handle_session)
+    app.router.add_get("/projects", handle_list_projects)
+    app.router.add_post("/projects", handle_create_project)
     app.router.add_get("/ws", handle_ws)
     app.router.add_get(
         "/simli_client_bundle.js",

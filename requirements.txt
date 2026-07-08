@@ -2,3 +2,4 @@ claude-agent-sdk
 websockets
 aiohttp
 edge_tts
+python-dotenv
