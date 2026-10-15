@@ -23,6 +23,7 @@ Closing the browser tab doesn't stop the work.
 - Plan first: new tasks start in plan mode and wait for your go-ahead before any edits
 - Access token: the page can't be used by anyone on your network without the link the server prints
 - Restore points: a snapshot of the project is saved before each approved task (kept out of your normal history)
+- Undo: say or type "undo that" (after a yes to confirm) to put the project back to how it was before the last task; repeat to go back further. Only covers tasks from the current server run
 - Safety backstop: a deterministic hook asks for confirmation before deletions, force-pushes, database drops, or anything touching production or `.env`
 
 ## Setup
