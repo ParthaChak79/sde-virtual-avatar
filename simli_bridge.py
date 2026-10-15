@@ -21,9 +21,11 @@ Then open http://localhost:8765/ in a browser on this Mac or the same network.
 """
 
 import asyncio
+import hmac
 import json
 import tempfile
 import os
+import secrets
 
 import edge_tts
 from aiohttp import web
@@ -220,8 +222,33 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
+ACCESS_COOKIE = "avatar_access"
+
+
+@web.middleware
+async def require_access_token(request: web.Request, handler):
+    """Gate every route behind the access token.
+
+    The page can direct a worker that runs commands on this Mac, so being on
+    the same network must not be enough to use it. The token arrives once in
+    the URL (?token=...), gets swapped for a SameSite=Strict cookie, and every
+    later request -- including the /ws upgrade -- is checked against it.
+    """
+    expected: str = request.app["access_token"]
+    supplied = request.query.get("token") or request.cookies.get(ACCESS_COOKIE, "")
+    if not hmac.compare_digest(supplied, expected):
+        return web.Response(status=401, text="Access token required. Use the link printed when the server started.")
+
+    response = await handler(request)
+    if request.query.get("token") and not isinstance(response, web.WebSocketResponse):
+        response.set_cookie(ACCESS_COOKIE, expected, httponly=True, samesite="Strict")
+    return response
+
+
 def main() -> None:
-    app = web.Application()
+    access_token = os.environ.get("ACCESS_TOKEN") or secrets.token_urlsafe(24)
+    app = web.Application(middlewares=[require_access_token])
+    app["access_token"] = access_token
     app["session_locks"] = {}
     app.router.add_get("/", handle_index)
     app.router.add_get("/session", handle_session)
@@ -233,7 +260,7 @@ def main() -> None:
         lambda r: web.FileResponse(os.path.join(os.path.dirname(__file__), "simli_client_bundle.js")),
     )
     print(f"Starting the worker for {PROJECT_ID} at {CWD} ...")
-    print(f"Open http://localhost:{LOCAL_PORT}/ in a browser to join the call.")
+    print(f"Open http://localhost:{LOCAL_PORT}/?token={access_token} in a browser to join the call.")
     web.run_app(app, host=LOCAL_HOST, port=LOCAL_PORT)
 
 

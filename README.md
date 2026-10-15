@@ -21,6 +21,8 @@ Closing the browser tab doesn't stop the work.
 - Embedded preview of local sites the worker starts
 - Plain-English replies only, no developer jargon
 - Plan first: new tasks start in plan mode and wait for your go-ahead before any edits
+- Access token: the page can't be used by anyone on your network without the link the server prints
+- Restore points: a snapshot of the project is saved before each approved task (kept out of your normal history)
 - Safety backstop: a deterministic hook asks for confirmation before deletions, force-pushes, database drops, or anything touching production or `.env`
 
 ## Setup
@@ -38,10 +40,14 @@ echo "SIMLI_API_KEY=your_key_here" > .env
 
 ```bash
 python3 -u simli_bridge.py     # start the call server
-# then open http://localhost:8765/
+# then open the link it prints (http://localhost:8765/?token=...)
 ```
 
 To talk to the worker in a plain terminal without the avatar: `python3 test_worker.py`
+
+To run the safety-hook tests: `pip install pytest && python3 -m pytest test_risk.py`
+
+The link's token is random each start. Set `ACCESS_TOKEN` in `.env` to keep it stable.
 
 ## Status
 

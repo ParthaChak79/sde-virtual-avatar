@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable
 
+from checkpoint import create_checkpoint
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
@@ -82,6 +83,15 @@ _RISKY_BASH_PATTERNS: list[tuple[str, str]] = [
     (r"\bdrop\s+database\b", "permanently deletes an entire place where information is stored"),
     (r"\btruncate\s+table\b", "wipes out all the stored rows in a table"),
     (r"\bdelete\s+from\s+\w+\b(?!.*\bwhere\b)", "deletes stored records with nothing limiting which ones"),
+    (r"\bfind\b[^\n]*(-delete\b|-exec\s+(rm|shred|unlink)\b)", "searches for files and deletes whatever it finds"),
+    (r"\brmtree\b|\bos\.(remove|unlink|rmdir)\b|\bpathlib\b[^\n]*\.unlink\b", "runs a script that deletes files"),
+    (r"\bgit\s+(checkout\s+(--\s+)?\.|restore\b|stash\s+(drop|clear))", "throws away changes that were never saved"),
+    (r"\bgit\s+push\b[^\n]*\s\+\S", "force-pushes and could overwrite work already on the shared copy"),
+    (r"\bgit\s+(reflog\s+expire|gc\b[^\n]*--prune)", "permanently erases the safety history that lets work be recovered"),
+    (r"\bmv\b[^\n]*\s/dev/null\b", "moves a file into the void, which deletes it"),
+    (r"(?:^|[;&|]\s*)>(?!>)\s*(?!/dev/null)\S", "overwrites a file with nothing"),
+    (r"\btruncate\s+-s\b", "cuts a file down, possibly to empty"),
+    (r"\brsync\b[^\n]*--delete", "makes one folder match another by deleting extra files"),
     (r"\bshutdown\b|\breboot\b", "restarts or turns off the machine it runs on"),
     (r"\bmkfs\b|\bdd\s+if=", "can overwrite an entire disk"),
 ]
@@ -229,6 +239,10 @@ class WorkerSession:
         assert self._client is not None
 
         if self.mode == "plan" and _looks_like_approval(user_text):
+            ref = await asyncio.to_thread(create_checkpoint, self.cwd, user_text[:60])
+            if ref is not None:
+                self.work_log.append(WorkLogEntry(summary="saved a restore point before starting"))
+                self.on_activity("saved a restore point before starting")
             await self._set_mode("acceptEdits")
 
         await self._client.query(user_text)
