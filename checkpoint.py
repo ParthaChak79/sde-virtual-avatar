@@ -76,3 +76,26 @@ def list_checkpoints(cwd: str) -> list[str]:
     except (subprocess.CalledProcessError, OSError):
         return []
     return out.splitlines()
+
+
+def restore_checkpoint(cwd: str, ref: str) -> bool:
+    """Put the project folder back exactly as it was at `ref`.
+
+    Files the snapshot has are rewritten, and files created since (that git
+    doesn't ignore) are removed. Callers should take a fresh checkpoint first
+    so the restore itself can be undone.
+    """
+    try:
+        snapshot = set(_git(cwd, "ls-tree", "-r", "-z", "--name-only", ref).split("\0")) - {""}
+        current = set(_git(cwd, "ls-files", "-z", "--cached", "--others", "--exclude-standard").split("\0")) - {""}
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"GIT_INDEX_FILE": os.path.join(tmp, "index")}
+            _git(cwd, "read-tree", ref, env=env)
+            _git(cwd, "checkout-index", "-a", "-f", env=env)
+        for rel in current - snapshot:
+            path = os.path.join(cwd, rel)
+            if os.path.isfile(path) or os.path.islink(path):
+                os.remove(path)
+        return True
+    except (subprocess.CalledProcessError, OSError):
+        return False

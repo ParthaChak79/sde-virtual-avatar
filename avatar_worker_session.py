@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable
 
-from checkpoint import create_checkpoint
+from checkpoint import create_checkpoint, restore_checkpoint
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
@@ -172,6 +172,17 @@ _AFFIRMATIVE_RE = re.compile(
 )
 
 
+_UNDO_RE = re.compile(
+    r"^\s*(please\s+)?(undo|revert|roll\s*back|go\s+back)"
+    r"(\s+(that|it|everything|the\s+last\s+(task|change|changes|thing)))?\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_undo(text: str) -> bool:
+    return bool(_UNDO_RE.match(text))
+
+
 def _looks_like_approval(text: str) -> bool:
     return bool(_AFFIRMATIVE_RE.search(text.strip()))
 
@@ -197,6 +208,7 @@ class WorkerSession:
         self.auto_prompt_terminal = True
         self._client: ClaudeSDKClient | None = None
         self._started = False
+        self._restore_points: list[str] = []
 
     def _speak(self, text: str) -> None:
         self.on_speak(text)
@@ -238,9 +250,14 @@ class WorkerSession:
         """Feed one message to the worker and speak its reply as it streams in."""
         assert self._client is not None
 
+        if _looks_like_undo(user_text):
+            await self._undo_last_task()
+            return
+
         if self.mode == "plan" and _looks_like_approval(user_text):
             ref = await asyncio.to_thread(create_checkpoint, self.cwd, user_text[:60])
             if ref is not None:
+                self._restore_points.append(ref)
                 self.work_log.append(WorkLogEntry(summary="saved a restore point before starting"))
                 self.on_activity("saved a restore point before starting")
             await self._set_mode("acceptEdits")
@@ -257,6 +274,32 @@ class WorkerSession:
 
         if self.mode == "acceptEdits":
             await self._set_mode("plan")
+
+    async def _undo_last_task(self) -> None:
+        """Put the project back to how it was before the most recent approved task."""
+        if not self._restore_points:
+            self._speak("I don't have anything saved to go back to from this session, so there's nothing I can undo.")
+            return
+
+        approved = await self._request_confirmation(
+            "Undo",
+            {},
+            "that puts the project back to how it was before my last task, and anything I changed since then goes away",
+        )
+        if not approved:
+            return
+
+        # Save the current state first so the undo itself can be reversed by hand.
+        await asyncio.to_thread(create_checkpoint, self.cwd, "before undo")
+        ref = self._restore_points[-1]
+        if await asyncio.to_thread(restore_checkpoint, self.cwd, ref):
+            self._restore_points.pop()
+            summary = "put the project back to how it was before the last task"
+            self.work_log.append(WorkLogEntry(summary=summary))
+            self.on_activity(summary)
+            self._speak("Done. Everything is back to how it was before my last task.")
+        else:
+            self._speak("I couldn't put things back, so I've left everything as it is.")
 
     def status_report(self) -> str:
         """Plain-English summary for reconnects: what got finished, what's next."""
