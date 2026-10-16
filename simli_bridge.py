@@ -79,6 +79,17 @@ async def text_to_pcm16(text: str) -> bytes:
         os.unlink(mp3_path)
 
 
+async def speak_to_browser(ws: web.WebSocketResponse, text: str) -> None:
+    """Send an utterance as text, then as audio. If the voice service fails, the call stays up in text-only mode."""
+    await ws.send_str(json.dumps({"type": "text", "text": text}))
+    try:
+        pcm = await text_to_pcm16(text)
+    except Exception as e:
+        await ws.send_str(json.dumps({"type": "error", "message": f"Voice is unavailable right now ({type(e).__name__}); showing text only."}))
+        return
+    await ws.send_bytes(pcm)
+
+
 async def handle_session(request: web.Request) -> web.Response:
     """Mint a short-lived Simli session token + ICE servers for the browser."""
     import aiohttp
@@ -151,8 +162,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
     session_lock = session_locks.setdefault(project_id, asyncio.Lock())
 
     opening = session.status_report() if was_running else "Hi, I'm ready to help. What would you like me to work on?"
-    await ws.send_str(json.dumps({"type": "text", "text": opening}))
-    await ws.send_bytes(await text_to_pcm16(opening))
+    await speak_to_browser(ws, opening)
 
     async for msg in ws:
         if msg.type != web.WSMsgType.TEXT:
@@ -185,9 +195,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                 utterance = await speak_queue.get()
                 if utterance is None:
                     break
-                await ws.send_str(json.dumps({"type": "text", "text": utterance}))
-                pcm = await text_to_pcm16(utterance)
-                await ws.send_bytes(pcm)
+                await speak_to_browser(ws, utterance)
 
         async def drain_activity() -> None:
             while True:

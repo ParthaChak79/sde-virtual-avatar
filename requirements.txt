@@ -1,5 +1,5 @@
 claude-agent-sdk
 websockets
 aiohttp
-edge_tts
+edge_tts>=7.3.1
 python-dotenv
