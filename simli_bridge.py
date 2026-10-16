@@ -29,19 +29,14 @@ import secrets
 
 import edge_tts
 from aiohttp import web
-from dotenv import load_dotenv
-
 from avatar_worker_session import SESSIONS
+from config import AI_PROJECTS_DIR, PROJECT_DIR, PROJECT_ID, SIMLI_API_KEY, SIMLI_FACE_ID
 
-load_dotenv()
-
-PROJECT_ID = "sde-virtual-avatar"
-CWD = "/Users/partha/Downloads/SDE Virtual Avatar"
+CWD = PROJECT_DIR
 
 # Where new projects the avatar creates for you live. Picking a project on
 # the page before joining the call is what tells this server which folder
 # (and which persistent WorkerSession) to attach to -- see handle_ws.
-AI_PROJECTS_DIR = os.path.expanduser("~/Downloads/AI Projects")
 
 # project_id -> cwd, for every project the browser has seen via /projects.
 # handle_ws looks the cwd up here rather than trusting a path from the
@@ -49,8 +44,6 @@ AI_PROJECTS_DIR = os.path.expanduser("~/Downloads/AI Projects")
 # folder on disk.
 KNOWN_PROJECTS: dict[str, str] = {PROJECT_ID: CWD}
 
-SIMLI_API_KEY = os.environ["SIMLI_API_KEY"]
-SIMLI_FACE_ID = "61141d2c-2729-42c3-8c72-86fae138667e"
 SIMLI_COMPOSE_TOKEN_URL = "https://api.simli.ai/compose/token"
 SIMLI_ICE_URL = "https://api.simli.ai/compose/ice"
 

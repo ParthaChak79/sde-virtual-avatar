@@ -6,9 +6,7 @@ Run: python test_worker.py
 import asyncio
 
 from avatar_worker_session import SESSIONS
-
-PROJECT_ID = "sde-virtual-avatar"
-CWD = "/Users/partha/Downloads/SDE Virtual Avatar"
+from config import PROJECT_DIR as CWD, PROJECT_ID
 
 
 def speak(text: str) -> None:

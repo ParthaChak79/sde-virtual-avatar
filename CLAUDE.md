@@ -27,7 +27,7 @@ LiveTalking/RunPod plan (see "Why Simli instead of LiveTalking/RunPod"
 below). The avatar uses a real custom face generated from the owner's own
 photo. Since then the call page has grown past a single fixed project: it
 now opens on a project picker (attach to the project already running or
-create a new one under `~/Downloads/AI Projects/`), the owner can talk
+create a new one under `AI_PROJECTS_DIR` (set in `.env`)), the owner can talk
 instead of type (browser speech-to-text), and the page shows a live
 plain-English activity feed plus an embedded preview of anything she stands
 up a local server for. Remaining Phase 3 items: a cloned voice (currently
@@ -121,7 +121,7 @@ The call page now opens on a picker (`GET /projects`) instead of going
 straight to Join Call:
 - Every project the browser can attach to is either this repo (fixed
   `PROJECT_ID`/`CWD`) or a folder under `AI_PROJECTS_DIR`
-  (`~/Downloads/AI Projects/`); `POST /projects` creates a new one there.
+  (`AI_PROJECTS_DIR` (set in `.env`)); `POST /projects` creates a new one there.
 - `handle_ws` never trusts a folder path sent by the browser directly — it
   looks the `project_id` up in the server-side `KNOWN_PROJECTS` dict
   (populated by `/projects`), so a stray request can't point a worker at an
@@ -155,15 +155,20 @@ source .venv/bin/activate
 pip install -r requirements.txt      # claude-agent-sdk, aiohttp, edge_tts, websockets, python-dotenv
 
 python3 test_worker.py               # talk to the worker in a plain terminal, no avatar
-python3 -u simli_bridge.py           # start the call server, then open http://localhost:8765/
+python3 -u simli_bridge.py           # start the call server, then open the link it prints (includes ?token=...)
+python3 -m pytest                    # risk-hook, restore-point and undo tests
 ```
 
 `ffmpeg` must be on PATH (`brew install ffmpeg`) — used to convert edge-tts's
 mp3 output to the PCM16/16kHz/mono format Simli requires.
 
-`SIMLI_API_KEY` lives in `.env` (git-ignored, not committed) and is loaded
-via `python-dotenv`'s `load_dotenv()` at the top of `simli_bridge.py` — set
-`.env` to `SIMLI_API_KEY=...` before running.
+All per-user settings (`SIMLI_API_KEY`, `SIMLI_FACE_ID`, `ANTHROPIC_API_KEY`,
+`PROJECT_DIR`, `AI_PROJECTS_DIR`) live in `.env` (git-ignored; template in
+`.env.example`) and are read in `config.py`. Every user supplies their own
+keys -- nothing is hardcoded. The server exits if the Simli ones are missing;
+a missing `ANTHROPIC_API_KEY` only prints a note and falls back to the local
+Claude Code login. Access to the page needs the `?token=` link printed at
+startup (`ACCESS_TOKEN` in `.env` makes it stable).
 
 ### Rebuilding `simli_client_bundle.js`
 
@@ -188,9 +193,8 @@ npx esbuild entry.js --bundle --format=esm --platform=browser --outfile=../simli
   (`/faces/trinity`) needs a paid tier; legacy works on the free tier and
   only needs a single photo (no video/looping required, unlike the old
   LiveTalking pipeline). Poll `GET .../generation_status?face_id=...`.
-- The current face id is hardcoded as `SIMLI_FACE_ID` in `simli_bridge.py`.
-- `SIMLI_API_KEY` lives in `.env` (see Commands above) and is read with
-  `os.environ["SIMLI_API_KEY"]` — never put the real key back in source.
+- The face id is `SIMLI_FACE_ID` in `.env`, read through `config.py` (all per-user settings live there).
+- Never put a real key back in source; keys come from `.env` via `config.py`.
 
 ## Design decisions that must not be casually changed
 
