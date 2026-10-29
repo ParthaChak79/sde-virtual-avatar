@@ -9,3 +9,4 @@ __pycache__/
 *.jpeg
 .claude/
 .DS_Store
+!docs/*.png
