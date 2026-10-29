@@ -7,8 +7,6 @@ An AI coding teammate for Claude Code you can video-call. You talk to her on scr
 Built for non-developers: you manage it the way you'd manage a remote engineer. Give a task, get a plan, approve it, check back later.
 
 
-*She is on the call (left), building a landing page while a live preview (top right) and an activity feed (bottom right) update as she works.*
-
 ## How it works
 
 Two parts, deliberately kept separate:
