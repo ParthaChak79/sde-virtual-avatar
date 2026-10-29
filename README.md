@@ -1,10 +1,11 @@
-# SDE Virtual Avatar
+# Claudia - SDE Virtual Avatar
 
-An AI coding teammate you can video-call. You talk to her on screen, she plans and does real programming work on your computer, and keeps working after you hang up.
+![The avatar on a video call, with a live preview of the landing page she built and a feed of what she is doing](docs/screenshot.png)
+
+An AI coding teammate for Claude Code you can video-call. You talk to her on screen, she plans and does real programming work on your computer, and keeps working after you hang up.
 
 Built for non-developers: you manage it the way you'd manage a remote engineer. Give a task, get a plan, approve it, check back later.
 
-![The avatar on a video call, with a live preview of the landing page she built and a feed of what she is doing](docs/screenshot.png)
 
 *She is on the call (left), building a landing page while a live preview (top right) and an activity feed (bottom right) update as she works.*
 
