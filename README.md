@@ -1,6 +1,6 @@
 # SDE Virtual Avatar
 
-An AI coding teammate you can video-call. You talk to a face on screen, it plans and does real programming work on your computer, and it keeps working after you hang up.
+An AI coding teammate you can video-call. You talk to her on screen, she plans and does real programming work on your computer, and keeps working after you hang up.
 
 Built for non-developers: you manage it the way you'd manage a remote engineer. Give a task, get a plan, approve it, check back later.
 
